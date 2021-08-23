@@ -1,11 +1,18 @@
-## My Project
+# Amazon Connect Tasks demo  
 
-TODO: Fill this README out!
+This demo shows how you can use [Amazon Connect Tasks](https://aws.amazon.com/connect/tasks/) to automate the intake process for a medical lab.
 
-Be sure to:
+## Usage
+Use `sam` to build, invoke and deploy the function.
 
-* Change the title in this README
-* Edit your repository description on GitHub
+##### SAM Build:
+Ensure you are in the root folder
+
+`sam build --use-container`
+
+##### SAM Deploy:
+`sam deploy --guided` 
+Follow the on-screen prompts. To accept the default options provided in the interactive experience, respond with Enter.
 
 ## Security
 

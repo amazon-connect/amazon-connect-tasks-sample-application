@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Patient Check-In Center</title>
+
+
+<!-- CSS -->
+<style>
+
+    /* Chrome, Safari, Edge, Opera */
+    input::-webkit-outer-spin-button,
+    input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+    }
+
+    /* Firefox */
+    input[type=number] {
+    -moz-appearance: textfield;
+    }
+
+    .myForm img {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    }
+
+    .myForm {
+    font-family: "Lucida Sans Unicode", "Lucida Grande", sans-serif;
+    font-size: 0.8em;
+    width: 60em;
+    padding: 1em;
+    border: 1px solid #ccc;
+    }
+    
+    .myForm * {
+    box-sizing: border-box;
+    }
+    
+    .myForm fieldset {
+    border: none;
+    padding: 0;
+    }
+    
+    .myForm legend,
+    .myForm label {
+    padding: 0;
+    font-weight: bold;
+    }
+    
+    .myForm label.choice {
+    font-size: 0.9em;
+    font-weight: normal;
+    }
+    
+    .myForm label {
+    text-align: left;
+    display: block;
+    }
+    
+    .myForm input[type="text"],
+    .myForm input[type="number"],
+    .myForm input[type="tel"],
+    .myForm input[type="email"],
+    .myForm input[type="date"],
+    .myForm select,
+    .myForm textarea {
+    float: right;
+    width: 60%;
+    border: 1px solid #ccc;
+    font-family: "Lucida Sans Unicode", "Lucida Grande", sans-serif;
+    font-size: 0.9em;
+    padding: 0.3em;
+    }
+    
+    .myForm textarea {
+    height: 100px;
+    }
+    
+    .myForm input[type="radio"],
+    .myForm input[type="checkbox"] {
+    margin-left: 40%;
+    }
+    
+    .myForm button {
+    padding: 1em;
+    border-radius: 0.5em;
+    background: #eee;
+    border: none;
+    font-weight: bold;
+    margin-left: 40%;
+    margin-top: 1.8em;
+    }
+    
+    .myForm button:hover {
+    background: #ccc;
+    cursor: pointer;
+    }
+</style>
+
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+
+<script>
+    function submitToAPI(e) {
+        e.preventDefault();
+        var URL = "API_GATEWAY_INVOKE_URL";
+
+        var Namere = /[A-Za-z]{1}[A-Za-z]/;
+        if (!Namere.test($("#name-input").val())) {
+                    alert ("Name can not less than 2 char");
+            return;
+        }
+
+        var Patientidre = /^\d+$/;
+        if (!Patientidre.test($("#patient-number-input").val())) {
+                    alert ("Enter Patient ID");
+            return;
+        }
+
+        var Phonere = /[0-9]{10}/;
+        if (!Phonere.test($("#phone-input").val())) {
+            alert ("Please enter valid phone number");
+            return;
+        }
+
+
+        var name = $("#name-input").val();
+        var birthdate = $("#birthdate").val();
+        var patientnumber = $("#patient-number-input").val();
+
+        var testtype = document.querySelector('input[name = "test"]:checked').value;
+
+        // var testtype = $("#test-type").val();
+        var phone = $("#phone-input").val();
+        var checkedAppointmentValue = $('.appointmentCheckbox:checked').val();
+        
+        
+        var data = {
+            name : name,
+            birthdate : birthdate,
+            patientnumber : patientnumber,
+            testtype : testtype,
+            phone : phone,
+            onlineappointment : checkedAppointmentValue,
+            };
+        console.log(data);
+        $.ajax({
+            url : URL,
+            type: 'POST',
+            crossDomain: true,
+            data: JSON.stringify(data),
+            dataType: 'json',
+            headers: {
+                'Content-Type': 'application/json'
+            },            
+            
+            success: function () {
+            // clear form and show a success message
+            alert("Successfully Checked In!");
+            document.getElementById("visitor-check-in-form").reset();
+        location.reload();
+            },
+            error: function () {
+            // show an error message
+            alert("Sorry, please try again later");
+            }});
+        }
+</script>
+
+</head>
+<body>
+<form class="myForm" id="visitor-check-in-form" method="post">
+    <img src="https://amazon-connect-blogs-assets.s3.amazonaws.com/2021/tasks/checkin.jpg" alt="CheckIn" class="center">
+
+    <p>
+        <label>Name
+        <input type="text" id="name-input" name="patient_name" autofocus="autofocus" required="required"/>
+        <!-- <input id="name" type="text" required="required" /> -->
+        </label> 
+    </p>
+
+    <p>
+        <label>Date of birth
+        <input type="date" id="birthdate" name="birthdate" required/>
+        </label> 
+    </p>
+
+    <p>
+        <label>Patient ID
+        <input type="number" id="patient-number-input" name="patient_number_input" required/>
+        </label> 
+    </p>
+    <br>
+
+
+    <fieldset id="test-type">
+        <legend>Which test do you require?</legend>
+        <input type="radio" id="test1" name="test" value="General diagnostic test" checked="checked">General diagnostic test<br>
+        <input type="radio" id="test2" name="test" value="Genetic testing">Genetic testing<br>
+        <input type="radio" id="test3" name="test" value="Naturopathic tests">Naturopathic tests<br>
+        <input type="radio" id="test4" name="test" value="Heart monitoring">Heart monitoring<br>
+        <input type="radio" id="test5" name="test" value="Other">Other<br>
+    </fieldset>
+
+    <p>
+        <label>Phone Number
+        <input type="tel" id="phone-input" name="phone-input" required/>
+        </label> 
+    </p>
+    <br>
+
+    <p>
+        <legend>Do you have an online appointment?</legend>
+        <label class="choice"> 
+            <input type="checkbox" class="appointmentCheckbox" value="1"> Yes 
+        </label>
+    </p> <br>
+
+    <button type="button" onClick="submitToAPI(event)" class="btn btn-lg" style="margin-top:20px;">Submit</button>
+</form>
+
+</body>
+</html>

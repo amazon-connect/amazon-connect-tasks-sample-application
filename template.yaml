@@ -1,0 +1,899 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  Amazon Connect Tasks demo
+
+Mappings: 
+  FunctionMap:
+      Configuration:
+          S3Bucket: "amazon-connect-blogs-assets"
+          S3Key: "2021/tasks/"
+
+Parameters:
+  CFS3BucketForAppointmentWebSite:
+    Default:  "appointment-website"
+    Type: String
+    AllowedPattern: '(?=^.{3,63}$)(?!^(\d+\.)+\d+$)(^(([a-z0-9]|[a-z0-9][a-z0-9\-]*[a-z0-9])\.)*([a-z0-9]|[a-z0-9][a-z0-9\-]*[a-z0-9])$)'
+    ConstraintDescription: 'Invalid S3 Bucket name'
+    Description: Enter the (globally unique) name you would like to use for the Amazon S3 bucket where we will store the appointment website assets. This template will fail to deploy if the bucket name you chose is currently in use.
+  CFS3BucketForCheckInWebSite:
+    Default:  "checkin-website"
+    Type: String
+    AllowedPattern: '(?=^.{3,63}$)(?!^(\d+\.)+\d+$)(^(([a-z0-9]|[a-z0-9][a-z0-9\-]*[a-z0-9])\.)*([a-z0-9]|[a-z0-9][a-z0-9\-]*[a-z0-9])$)'
+    ConstraintDescription: 'Invalid S3 Bucket name'
+    Description: Enter the (globally unique) name you would like to use for the Amazon S3 bucket where we will store the checkin website assets. This template will fail to deploy if the bucket name you chose is currently in use.
+  InstanceIdParam:
+    Type: String
+    AllowedPattern: '\w{8}-\w{4}-\w{4}-\w{4}-\w{12}'
+    ConstraintDescription: "Invalid Amazon Connect instance Id"
+    Description: Amazon Connect Instance ID (Ensure you it is entered accurately in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx ).
+  InstanceNameParam:
+    Type: String
+    ConstraintDescription: "Invalid Amazon Connect instance alias"
+    Description: Amazon Connect Instance Alias (Ensure you it is entered accurately as configured under Amazon Connect Service ).
+  OperatingHoursIdParam:
+    Type: String
+    AllowedPattern: '\w{8}-\w{4}-\w{4}-\w{4}-\w{12}'
+    ConstraintDescription: "Invalid Amazon Connect Operating Hours Id"
+    Description: Amazon Connect Operating Hours ID (Ensure you it is entered accurately in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx ).
+  SecurityProfileIdParam:
+    Type: String
+    AllowedPattern: '\w{8}-\w{4}-\w{4}-\w{4}-\w{12}'
+    ConstraintDescription: "Invalid Amazon Connect Security Profile Id"
+    Description: Amazon Connect Security Profile ID (Ensure you it is entered accurately in the format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx ).
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Amazon S3 Configuration 
+        Parameters:
+          - CFS3BucketForAppointmentWebSite
+          - CFS3BucketForCheckInWebSite
+      - Label:
+          default: Amazon Connect Configuration
+        Parameters:
+          - InstanceIdParam
+          - InstanceNameParam
+          - OperatingHoursIdParam
+          - SecurityProfileIdParam
+    ParameterLabels:
+      CFS3BucketForAppointmentWebSite:
+        default: S3 Bucket For Appointment WebSite
+      CFS3BucketForCheckInWebSite:
+        default: S3 Bucket For CheckIn WebSite
+      InstanceIdParam:
+        default: Instance ID
+      InstanceNameParam:
+        default: Instance Name
+      OperatingHoursIdParam:
+        default: Operating Hours ID
+      SecurityProfileIdParam:
+        default: Security Profile ID
+
+Resources:
+    appointmentDDBTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          -
+            AttributeName: "patientId"
+            AttributeType: "S"
+          -
+            AttributeName: "appointmentDateTime"
+            AttributeType: "N"
+        KeySchema:
+          -
+            AttributeName: "patientId"
+            KeyType: "HASH"
+          -
+            AttributeName: "appointmentDateTime"
+            KeyType: "RANGE"
+        PointInTimeRecoverySpecification:
+            PointInTimeRecoveryEnabled: True
+        SSESpecification:
+            SSEEnabled: True
+        TimeToLiveSpecification:
+            AttributeName:  "ExpiresAfter"
+            Enabled:  True
+        StreamSpecification:
+            StreamViewType: NEW_AND_OLD_IMAGES
+
+    allowConnectTocheckPatientAppointmentLambda:
+        Type: 'AWS::Lambda::Permission'
+        Properties:
+            FunctionName: !GetAtt checkPatientAppointmentLambdaFunction.Arn
+            Action: 'lambda:InvokeFunction'
+            Principal: connect.amazonaws.com
+            SourceAccount: !Ref 'AWS::AccountId'
+
+    checkPatientAppointmentLambdaFunctionRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+          AssumeRolePolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Principal:
+                  Service:
+                    - "lambda.amazonaws.com"
+                Action:
+                  - "sts:AssumeRole"
+          Path: "/"
+          Policies:
+            -
+              PolicyName: !Sub ${AWS::StackName}-create-contact-flow-policy
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - 'logs:CreateLogGroup'
+                      - 'logs:CreateLogStream'
+                      - 'logs:PutLogEvents'
+                    Resource: '*'
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - 'dynamodb:Query'
+                    Resource:
+                      - Fn::GetAtt:
+                          - appointmentDDBTable
+                          - Arn
+
+    checkPatientAppointmentLambdaFunction:
+      Type: "AWS::Lambda::Function"
+      Properties:
+        Description: Lambda function to check patient appointment.
+        Runtime: nodejs14.x
+        Role: !GetAtt checkPatientAppointmentLambdaFunctionRole.Arn
+        Handler: check_appointment.handler
+        MemorySize: 128
+        Timeout: 30
+        Environment:
+            Variables:
+                APPOINTMENT_TABLE: !Ref appointmentDDBTable
+        Code: ./CheckinWebSiteHelper/
+
+    CreateContactFlowRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+          AssumeRolePolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Principal:
+                  Service:
+                    - "lambda.amazonaws.com"
+                Action:
+                  - "sts:AssumeRole"
+          Path: "/"
+          Policies:
+            -
+              PolicyName: !Sub ${AWS::StackName}-create-contact-flow-policy
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - 'logs:CreateLogGroup'
+                      - 'logs:CreateLogStream'
+                      - 'logs:PutLogEvents'
+                    Resource: '*'
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - 'connect:*'
+                    Resource:
+                      - "*"
+
+    CreateContactFlow:
+      Type: "AWS::Lambda::Function"
+      Properties:
+        Description: Lambda function triggered by CFT to create Sample Contact Flow for Tasks.
+        Runtime: nodejs14.x
+        Role: !GetAtt CreateContactFlowRole.Arn
+        Handler: index.handler
+        MemorySize: 128
+        Timeout: 30
+        Environment:
+            Variables:
+                CONNECT_INSTANCE_ID: !Ref InstanceIdParam
+                OPERATING_HOURS_ID: !Ref OperatingHoursIdParam
+                SECURITY_PROFILE_ID: !Ref SecurityProfileIdParam
+        Code: ./ContactFlowHelper/
+
+    CreateContactFlowLambdaRun:
+      Type: Custom::CreateContactFlowLambdaRun
+      Properties:
+        ServiceToken: !GetAtt CreateContactFlow.Arn
+        GENERAL_DIAGNOSTIC_TEST_QUEUE_NAME: !Sub ${AWS::StackName}-GeneralDiagnosticTest-Queue
+        GENETIC_TEST_QUEUE_NAME: !Sub ${AWS::StackName}-GeneticTest-Queue
+        NATUROPATHIC_TEST_QUEUE_NAME: !Sub ${AWS::StackName}-NaturopathicTest-Queue
+        HEART_MONITORING_TEST_QUEUE_NAME: !Sub ${AWS::StackName}-HeartMonitoringTest-Queue
+        GENERAL_DIAGNOSTIC_TEST_ROUTING_PROFILE_NAME: !Sub ${AWS::StackName}-GeneralDiagnosticTest-RoutingProfile
+        GENETIC_TEST_ROUTING_PROFILE_NAME: !Sub ${AWS::StackName}-GeneticTest-RoutingProfile
+        NATUROPATHIC_TEST_ROUTING_PROFILE_NAME: !Sub ${AWS::StackName}-NaturopathicTest-RoutingProfile
+        HEART_MONITORING_TEST_ROUTING_PROFILE_NAME: !Sub ${AWS::StackName}-HeartMonitoringTest-RoutingProfile
+        GENERAL_DIAGNOSTIC_TEST_USER_NAME: !Sub ${AWS::StackName}-GeneralDiagnosticTest-LoginName
+        GENETIC_TEST_USER_NAME: !Sub ${AWS::StackName}-GeneticTest-LoginName
+        NATUROPATHIC_TEST_USER_NAME: !Sub ${AWS::StackName}-NaturopathicTest-LoginName
+        HEART_MONITORING_TEST_USER_NAME: !Sub ${AWS::StackName}-HeartMonitoringTest-LoginName
+        CONTACT_FLOW_NAME: !Sub ${AWS::StackName}-Tasks-Contact-Flow
+        CHECK_PATIENT_APPOINTMENT_LAMBDA_FUNCTION_ARN: !GetAtt checkPatientAppointmentLambdaFunction.Arn
+
+
+
+    ApiGatewayRestApi:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Description: Example API Gateway
+        EndpointConfiguration:
+          Types:
+            - EDGE
+        Name: !Sub ${AWS::StackName}-api
+
+    ApiGatewayResourceAppointment:
+      Type: AWS::ApiGateway::Resource
+      Properties:
+        ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+        PathPart: 'appointment'
+        RestApiId: !Ref ApiGatewayRestApi
+
+    ApiGatewayResourceCheckin:
+      Type: AWS::ApiGateway::Resource
+      Properties:
+        ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+        PathPart: 'checkin'
+        RestApiId: !Ref ApiGatewayRestApi
+
+    appointmentApiGatewayRootMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        ApiKeyRequired: false
+        AuthorizationType: NONE
+        HttpMethod: POST
+        Integration:
+          IntegrationResponses:
+            - StatusCode: 200
+              ResponseParameters:
+                'method.response.header.Access-Control-Allow-Headers': '''Content-Type,Authorization'''
+                'method.response.header.Access-Control-Allow-Methods': '''POST,OPTIONS'''
+                'method.response.header.Access-Control-Allow-Origin': '''*''' 
+              ResponseTemplates:
+                application/json: ''
+          ConnectionType: INTERNET
+          Credentials: !GetAtt ApiGatewayIamRole.Arn
+          IntegrationHttpMethod: POST
+          PassthroughBehavior: WHEN_NO_MATCH
+          TimeoutInMillis: 29000
+          Type: AWS
+          Uri: !Sub
+            - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations
+            - lambdaArn: !GetAtt appointmentApiLambdaFunction.Arn
+        MethodResponses:
+            -   StatusCode: 200
+                ResponseModels:
+                    application/json: 'Empty'
+                ResponseParameters:
+                    'method.response.header.Access-Control-Allow-Headers': false
+                    'method.response.header.Access-Control-Allow-Methods': false
+                    'method.response.header.Access-Control-Allow-Origin': false
+        ResourceId: !Ref ApiGatewayResourceAppointment
+        RestApiId: !Ref ApiGatewayRestApi
+
+    appointmentApiGatewayOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        ResourceId: !Ref ApiGatewayResourceAppointment
+        RestApiId: !Ref ApiGatewayRestApi
+        HttpMethod: OPTIONS
+        Integration:
+          IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            application/json: '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: 'Empty'
+          ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: false
+              method.response.header.Access-Control-Allow-Methods: false
+              method.response.header.Access-Control-Allow-Origin: false
+
+    checkInApiGatewayRootMethod:
+        Type: AWS::ApiGateway::Method
+        Properties:
+          ApiKeyRequired: false
+          AuthorizationType: NONE
+          HttpMethod: POST
+          Integration:
+            IntegrationResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  'method.response.header.Access-Control-Allow-Headers': '''Content-Type,Authorization'''
+                  'method.response.header.Access-Control-Allow-Methods': '''POST,OPTIONS'''
+                  'method.response.header.Access-Control-Allow-Origin': '''*'''
+                ResponseTemplates:
+                  application/json: ''
+            ConnectionType: INTERNET
+            Credentials: !GetAtt ApiGatewayIamRole.Arn
+            IntegrationHttpMethod: POST
+            PassthroughBehavior: WHEN_NO_MATCH
+            TimeoutInMillis: 29000
+            Type: AWS
+            Uri: !Sub
+              - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations
+              - lambdaArn: !GetAtt checkInApiLambdaFunction.Arn
+          MethodResponses:
+              -   StatusCode: 200
+                  ResponseModels:
+                      application/json: 'Empty'
+                  ResponseParameters:
+                      'method.response.header.Access-Control-Allow-Headers': false
+                      'method.response.header.Access-Control-Allow-Methods': false
+                      'method.response.header.Access-Control-Allow-Origin': false
+          ResourceId: !Ref ApiGatewayResourceCheckin
+          RestApiId: !Ref ApiGatewayRestApi
+
+    checkInApiGatewayOptionsMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        ResourceId: !Ref ApiGatewayResourceCheckin
+        RestApiId: !Ref ApiGatewayRestApi
+        HttpMethod: OPTIONS
+        Integration:
+          IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+          PassthroughBehavior: WHEN_NO_MATCH
+          RequestTemplates:
+            application/json: '{"statusCode": 200}'
+          Type: MOCK
+        MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: 'Empty'
+          ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: false
+              method.response.header.Access-Control-Allow-Methods: false
+              method.response.header.Access-Control-Allow-Origin: false
+              
+    ApiGatewayModel:
+      Type: AWS::ApiGateway::Model
+      Properties:
+        ContentType: 'application/json'
+        RestApiId: !Ref ApiGatewayRestApi
+        Schema: {}
+
+    ApiGatewayStage:
+      Type: AWS::ApiGateway::Stage
+      DependsOn:
+        - appointmentApiGatewayRootMethod
+        - appointmentApiGatewayOptionsMethod
+        - checkInApiGatewayRootMethod
+        - checkInApiGatewayOptionsMethod
+      Properties:
+        DeploymentId: !Ref ApiGatewayDeployment
+        Description: Spotlight API Stage beta
+        RestApiId: !Ref ApiGatewayRestApi
+        StageName: "prod"
+
+    ApiGatewayDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn:
+        - appointmentApiGatewayRootMethod
+        - checkInApiGatewayRootMethod
+      Properties:
+        Description: Spotlight API Deployment
+        RestApiId: !Ref ApiGatewayRestApi
+
+
+    ApiGatewayIamRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Sid: ''
+              Effect: 'Allow'
+              Principal:
+                Service:
+                  - 'apigateway.amazonaws.com'
+              Action:
+                - 'sts:AssumeRole'
+        Path: '/'
+        Policies:
+          - PolicyName: AppointmentAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: 'Allow'
+                  Action: 'lambda:*'
+                  Resource: !GetAtt appointmentApiLambdaFunction.Arn
+          - PolicyName: CheckinAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: 'Allow'
+                  Action: 'lambda:*'
+                  Resource: !GetAtt checkInApiLambdaFunction.Arn
+
+
+    appointmentApiLambdaFunction:
+      Type: AWS::Lambda::Function
+      Properties:
+        Code: ./AppointmentWebSiteHelper/
+        Description: Example Lambda function
+        FunctionName: !Sub ${AWS::StackName}-new-appointment-function
+        Handler: app.handler
+        MemorySize: 128
+        Role: !GetAtt lambdaIAMRole.Arn
+        Runtime: "nodejs14.x"
+        Environment:
+            Variables:
+                APPOINTMENT_TABLE: !Ref appointmentDDBTable
+
+    lambdaIAMRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Action:
+                - sts:AssumeRole
+              Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+        Policies:
+          - PolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Effect: Allow
+                  Resource: '*'
+                - Action:
+                    - dynamodb:PutItem
+                  Effect: Allow
+                  Resource:
+                    - Fn::GetAtt:
+                        - appointmentDDBTable
+                        - Arn
+            PolicyName: !Sub ${AWS::StackName}-appointment-lambda-policy
+
+
+
+    checkInApiLambdaFunction:
+      Type: AWS::Lambda::Function
+      Properties:
+        Code: ./CheckinWebSiteHelper/
+        Description: CheckIn Lambda function
+        FunctionName: !Sub ${AWS::StackName}-checkin-function
+        Handler: app.handler
+        MemorySize: 128
+        Role: !GetAtt checkInLambdaIAMRole.Arn
+        Runtime: "nodejs14.x"
+        Environment:
+            Variables:
+                CONNECT_INSTANCE_ID: !Ref InstanceIdParam
+                CONTACT_FLOW_ID: !GetAtt CreateContactFlowLambdaRun.contactFlowId
+
+
+    checkInLambdaIAMRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Action:
+                - sts:AssumeRole
+              Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+        Policies:
+          - PolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Effect: Allow
+                  Resource: '*'
+                - Action:
+                    - connect:StartTaskContact
+                  Effect: Allow
+                  Resource: "*"
+            PolicyName: !Sub ${AWS::StackName}-checkin-lambda-policy
+
+
+# Appointment Website
+
+    createAppointmentWebSiteS3Bucket:
+        Type: 'AWS::S3::Bucket'
+        Properties:
+            BucketName: !Ref CFS3BucketForAppointmentWebSite
+            PublicAccessBlockConfiguration:
+                BlockPublicAcls: True
+                BlockPublicPolicy: True
+                IgnorePublicAcls: True
+                RestrictPublicBuckets: True
+            WebsiteConfiguration:
+                IndexDocument: appointment.html
+                ErrorDocument: error.html
+ 
+ 
+    AppointmentCFS3BucketPolicy:
+        Type: AWS::S3::BucketPolicy
+        Properties:
+            Bucket: !Ref createAppointmentWebSiteS3Bucket
+            PolicyDocument:
+                Statement:
+                    -
+                        Action:
+                            - "s3:GetObject"
+                        Effect: "Allow"
+                        Principal:
+                            CanonicalUser:
+                                Fn::GetAtt: [ AppointmentCFCloudFrontDistributionAccessIdentity , S3CanonicalUserId ]
+                        Resource:
+                            !Sub ${createAppointmentWebSiteS3Bucket.Arn}/appointmentsite/*
+
+    AppointmentCFCloudFrontDistributionAccessIdentity:
+        Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+        Properties:
+          CloudFrontOriginAccessIdentityConfig:
+            Comment: 'CloudFront endpoint for appointment site S3'
+            
+    AppointmentCFCloudFrontDistribution:
+        Type: AWS::CloudFront::Distribution
+        Properties:
+          DistributionConfig:
+            Origins:
+            - DomainName:
+                !Join
+                    - ''
+                    - - !Ref CFS3BucketForAppointmentWebSite
+                      - .s3.amazonaws.com
+              Id: !Ref CFS3BucketForAppointmentWebSite
+              OriginPath: '/appointmentsite'
+              S3OriginConfig:
+                OriginAccessIdentity:
+                    !Join
+                        - ''
+                        - - 'origin-access-identity/cloudfront/'
+                          - !Ref AppointmentCFCloudFrontDistributionAccessIdentity
+            Enabled: 'true'
+            Logging:
+                Bucket: !GetAtt createAppointmentWebSiteS3Bucket.DomainName
+                Prefix: 'logs/'
+                IncludeCookies: 'true'
+            Comment: CloudFront for Appointment website
+            DefaultRootObject: appointment.html
+            DefaultCacheBehavior:
+                AllowedMethods:
+                    - DELETE
+                    - GET
+                    - HEAD
+                    - OPTIONS
+                    - PATCH
+                    - POST
+                    - PUT
+                TargetOriginId: !Ref CFS3BucketForAppointmentWebSite
+                ForwardedValues:
+                    QueryString: true
+                    Cookies:
+                        Forward: all
+                ViewerProtocolPolicy: redirect-to-https
+            Restrictions:
+                GeoRestriction:
+                    RestrictionType: none
+
+    AppointmentCFWebsiteCreatorRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+          AssumeRolePolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Principal:
+                  Service:
+                    - "lambda.amazonaws.com"
+                Action:
+                  - "sts:AssumeRole"
+          Path: "/"
+          Policies:
+            -
+              PolicyName: !Sub ${AWS::StackName}-appointment-website-creator-policy
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - 'logs:CreateLogGroup'
+                      - 'logs:CreateLogStream'
+                      - 'logs:PutLogEvents'
+                    Resource: '*'
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - "s3:PutObject"
+                      - "s3:GetObject"
+                      - "s3:PutObjectAcl"
+                    Resource:
+                      -  !Join
+                          - ''
+                          - - 'arn:'
+                            - !Ref 'AWS::Partition'
+                            - ':s3:::'
+                            - !Ref CFS3BucketForAppointmentWebSite
+                            - '/*'
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - "s3:PutBucketPublicAccessBlock"
+                    Resource:
+                      -  !Join
+                          - ''
+                          - - 'arn:'
+                            - !Ref 'AWS::Partition'
+                            - ':s3:::'
+                            - !Ref CFS3BucketForAppointmentWebSite
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - "s3:GetObject"
+                    Resource:
+                      -  !Join
+                          - ''
+                          - - 'arn:'
+                            - !Ref 'AWS::Partition'
+                            - ':s3:::'
+                            - !FindInMap [FunctionMap, Configuration, S3Bucket]
+                            - '/*'
+
+    AppointmentWebSiteCreator:
+      Type: "AWS::Lambda::Function"
+      Properties:
+        Description:  >
+            AWS Lambda Function that will create the appointment website and upload it to the S3 bucket
+        Handler: "index.handler"
+        Role: !GetAtt AppointmentCFWebsiteCreatorRole.Arn
+        Runtime: "nodejs14.x"
+        MemorySize: 256
+        Timeout: 120
+        Code: ./AppointmentWebSiteHelper/
+        
+    invokeAppointmentWebSiteCreator:
+        Type: Custom::CreateWebSite
+        Properties:  
+            ServiceToken:  !GetAtt AppointmentWebSiteCreator.Arn
+            customAction: configureWebsite
+            Region: !Ref AWS::Region
+            destS3Bucket: !Ref CFS3BucketForAppointmentWebSite
+            destS3KeyPrefix: appointmentsite
+            connectInstanceName: !Ref InstanceNameParam
+            apiGatewayInvokeURL: !Sub https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/appointment       
+
+# CheckIn Website
+    createCheckInWebSiteS3Bucket:
+        Type: 'AWS::S3::Bucket'
+        Properties:
+            BucketName: !Ref CFS3BucketForCheckInWebSite
+            PublicAccessBlockConfiguration:
+                BlockPublicAcls: True
+                BlockPublicPolicy: True
+                IgnorePublicAcls: True
+                RestrictPublicBuckets: True
+            WebsiteConfiguration:
+                IndexDocument: checkin.html
+                ErrorDocument: error.html
+ 
+    CheckInCFS3BucketPolicy:
+        Type: AWS::S3::BucketPolicy
+        Properties:
+            Bucket: !Ref createCheckInWebSiteS3Bucket
+            PolicyDocument:
+                Statement:
+                    -
+                        Action:
+                            - "s3:GetObject"
+                        Effect: "Allow"
+                        Principal:
+                            CanonicalUser:
+                                Fn::GetAtt: [ CheckInCFCloudFrontDistributionAccessIdentity , S3CanonicalUserId ]
+                        Resource:
+                            !Sub ${createCheckInWebSiteS3Bucket.Arn}/checkinsite/*
+
+    CheckInCFCloudFrontDistributionAccessIdentity:
+        Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+        Properties:
+          CloudFrontOriginAccessIdentityConfig:
+            Comment: 'CloudFront endpoint for CheckIn site S3'
+            
+    CheckInCFCloudFrontDistribution:
+        Type: AWS::CloudFront::Distribution
+        Properties:
+          DistributionConfig:
+            Origins:
+            - DomainName:
+                !Join
+                    - ''
+                    - - !Ref CFS3BucketForCheckInWebSite
+                      - .s3.amazonaws.com
+              Id: !Ref CFS3BucketForCheckInWebSite
+              OriginPath: '/checkinsite'
+              S3OriginConfig:
+                OriginAccessIdentity:
+                    !Join
+                        - ''
+                        - - 'origin-access-identity/cloudfront/'
+                          - !Ref CheckInCFCloudFrontDistributionAccessIdentity
+            Enabled: 'true'
+            Logging:
+                Bucket: !GetAtt createCheckInWebSiteS3Bucket.DomainName
+                Prefix: 'logs/'
+                IncludeCookies: 'true'
+            Comment: CloudFront for CheckIn website
+            DefaultRootObject: checkin.html
+            DefaultCacheBehavior:
+                AllowedMethods:
+                    - DELETE
+                    - GET
+                    - HEAD
+                    - OPTIONS
+                    - PATCH
+                    - POST
+                    - PUT
+                TargetOriginId: !Ref CFS3BucketForCheckInWebSite
+                ForwardedValues:
+                    QueryString: true
+                    Cookies:
+                        Forward: all
+                ViewerProtocolPolicy: redirect-to-https
+            Restrictions:
+                GeoRestriction:
+                    RestrictionType: none
+
+    CheckInCFWebsiteCreatorRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+          AssumeRolePolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Principal:
+                  Service:
+                    - "lambda.amazonaws.com"
+                Action:
+                  - "sts:AssumeRole"
+          Path: "/"
+          Policies:
+            -
+              PolicyName: !Sub ${AWS::StackName}-checkin-website-creator-policy
+              PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - 'logs:CreateLogGroup'
+                      - 'logs:CreateLogStream'
+                      - 'logs:PutLogEvents'
+                    Resource: '*'
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - "s3:PutObject"
+                      - "s3:GetObject"
+                      - "s3:PutObjectAcl"
+                    Resource:
+                      -  !Join
+                          - ''
+                          - - 'arn:'
+                            - !Ref 'AWS::Partition'
+                            - ':s3:::'
+                            - !Ref CFS3BucketForCheckInWebSite
+                            - '/*'
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - "s3:PutBucketPublicAccessBlock"
+                    Resource:
+                      -  !Join
+                          - ''
+                          - - 'arn:'
+                            - !Ref 'AWS::Partition'
+                            - ':s3:::'
+                            - !Ref CFS3BucketForCheckInWebSite
+                  -
+                    Effect: "Allow"
+                    Action:
+                      - "s3:GetObject"
+                    Resource:
+                      -  !Join
+                          - ''
+                          - - 'arn:'
+                            - !Ref 'AWS::Partition'
+                            - ':s3:::'
+                            - !FindInMap [FunctionMap, Configuration, S3Bucket]
+                            - '/*'
+
+    CheckInWebSiteCreator:
+      Type: "AWS::Lambda::Function"
+      Properties:
+        Description:  >
+            AWS Lambda Function that will create the website and upload it to the S3 bucket
+        Handler: "index.handler"
+        Role: !GetAtt CheckInCFWebsiteCreatorRole.Arn
+        Runtime: "nodejs14.x"
+        MemorySize: 256
+        Timeout: 120
+        Code: ./CheckinWebSiteHelper/
+        
+    invokeCheckInWebSiteCreator:
+        Type: Custom::CreateWebSite
+        Properties:  
+            ServiceToken:  !GetAtt CheckInWebSiteCreator.Arn
+            customAction: configureWebsite
+            Region: !Ref AWS::Region
+            destS3Bucket: !Ref CFS3BucketForCheckInWebSite
+            destS3KeyPrefix: checkinsite
+            connectInstanceName: !Ref InstanceNameParam
+            apiGatewayInvokeURL: !Sub https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/checkin
+
+Outputs:
+  appointmentCloudfrontEndpoint:
+      Description: Endpoint for Appointment Cloudfront distribution
+      Value: !Join
+        - ''
+        - - 'https://'
+          - !GetAtt [AppointmentCFCloudFrontDistribution, DomainName]
+          - '/appointment.html'
+  checkinCloudfrontEndpoint:
+      Description: Endpoint for Check In Cloudfront distribution
+      Value: !Join
+        - ''
+        - - 'https://'
+          - !GetAtt [CheckInCFCloudFrontDistribution, DomainName]
+          - '/checkin.html'
+  GeneralDiagnosticTestAgentLoginName:
+      Description: Login name of agent for General Diagnostic Test
+      Value: !Sub ${AWS::StackName}-GeneralDiagnosticTest-LoginName
+  GeneticTestAgentLoginName:
+      Description: Login name of agent for Genetic Test
+      Value: !Sub ${AWS::StackName}-GeneticTest-LoginName
+  NaturopathicTestLoginName:
+      Description: Login name of agent for Naturopathic Test
+      Value: !Sub ${AWS::StackName}-NaturopathicTest-LoginName
+  HeartMonitoringTestLoginName:
+      Description: Login name of agent for HeartMonitoring Test
+      Value: !Sub ${AWS::StackName}-HeartMonitoringTest-LoginName
